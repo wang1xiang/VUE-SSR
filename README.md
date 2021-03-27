@@ -69,7 +69,7 @@
 
    在控制台会输出下列信息：`data-server-rendered="true"`是将来用于客户端渲染激活接管的入口
 
-   ![image-20210325080026326](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210325080026326.png)
+   ![image-20210325080026326](C:\Users\xiang wang\Desktop\image-20210325080026326.png)
 
 2. 与服务端集成，如何把渲染得到的结果发送给用户端浏览器
 
@@ -125,7 +125,7 @@
 
    此时，打开浏览器控制台，可以看到返回 html 片段信息：
 
-   ![image-20210325080651945](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210325080651945.png)
+   ![image-20210325080651945](C:\Users\xiang wang\Desktop\image-20210325080651945.png)
 
 3. HTML 模板内容单独维护
 
@@ -188,7 +188,7 @@
 
    此时可以看到浏览器中返回的 html 片段如下：
 
-   ![image-20210325082514556](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210325082514556.png)
+   ![image-20210325082514556](C:\Users\xiang wang\Desktop\image-20210325082514556.png)
 
 ##### 构建同构渲染
 
@@ -279,7 +279,7 @@ src
 
    配置文件及打包命令
 
-   - 初始化 webpack 打包配置文件，具体见[github]()
+   - 初始化 webpack 打包配置文件，具体见[github](https://github.com/wang1xiang/VUE-SSR/tree/master/build)
 
      ```bash
      build
@@ -287,61 +287,205 @@ src
      ├── webpack.client.config.js # 客户端打包配置文件
      └── webpack.server.config.js # 服务端打包配置文件
      ```
-     
+
    - 在 npm scripts 中配置打包命令
-   
+
      ```bash
      "scripts": {
-     "build:client": "cross-env NODE_ENV=production webpack --config
-     build/webpack.client.config.js",
-     "build:server": "cross-env NODE_ENV=production webpack --config
-     build/webpack.server.config.js",
+     "build:client": "cross-env NODE_ENV=production webpack --config build/webpack.client.config.js",
+     "build:server": "cross-env NODE_ENV=production webpack --config build/webpack.server.config.js",
      "build": "rimraf dist && npm run build:client && npm run build:server"
      },
      ```
 
 ###### 启动服务
 
-   具体实现[Bundle Renderer 指引](https://ssr.vuejs.org/zh/guide/bundle-renderer.html#%E4%BD%BF%E7%94%A8%E5%9F%BA%E6%9C%AC-ssr-%E7%9A%84%E9%97%AE%E9%A2%98)
+1. 通过`yarn build`打包生成客户端和服务端文件
 
-   替换 server.js 中 createRender 为 createBundleRenderer，接收 serverBundle、template 和 clientManifest 为参数
+2. 具体实现参考[Bundle Renderer 指引](https://ssr.vuejs.org/zh/guide/bundle-renderer.html#%E4%BD%BF%E7%94%A8%E5%9F%BA%E6%9C%AC-ssr-%E7%9A%84%E9%97%AE%E9%A2%98)
 
-  ![image-20210326082507311](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210326082507311.png)
+3. 替换 server.js 中 createRender 为 createBundleRenderer，接收 serverBundle、template 和 clientManifest 为参数，启动服务
+
+   ```js
+   ...
+   const serverBundle = require('./dist/vue-ssr-server-bundle.json')
+   const template = fs.readFileSync('./index.template.html', 'utf-8')
+   const clientManifest = require('./dist/vue-ssr-client-manifest.json')
+
+   renderer = require('vue-server-renderer').createBundleRenderer(serverBundle, {
+       template,
+       clientManifest,
+   })
+   ...
+   ```
 
    此时在浏览器端获取不到 dist 下的 js 文件，是因为没有在服务器当中有 dist 中的资源传递给客户端，挂载中间件 server.use('/dist')
 
-##### 构建配置-解析渲染流程
+   ![image-20210326082507311](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210326082507311.png)
 
-- 服务端渲染如何输出
+4. 挂载处理静态资源中间件
 
-  从路由着手，当客户端请求后匹配路由，调用 renderer 渲染器的 renderer.renderToString 将 vue 实例渲染为字符串发送给客户端，但是 renderToString 中并没有 vue 实例；renderer 是通过 createBundleRenderer 创建，传入的 serverBundle 是服务端打包出的结果，包含 entry 入口、files、maps 等信息；renderer 在渲染时会加载 serverBundle 的入口，得到 entrry-server 中创建的 vue 实例，对此 vue 实例进行渲染，并将渲染的结果注入到 template 模板当中，最终将 template 模板发送到客户端
+   ```js
+   const express = require('express')
+   // 得到express实例
+   const server = express()
+   // 挂载处理静态资源中间件
+   //dist应该和客户端打包的出口的publicPath保持一致 使用express.static处理静态资源
+   // 当请求到/dist开头的资源时，使用express.static尝试在./dist目录下查找并返回
+   server.use('/dist', express.static('./dist'))
+   ```
 
-- 客户端渲染如何接管并激活
+   此时重新刷新浏览器，js 文件正常加载，客户端交互功能正常
 
-  需要客户端打包的 js 脚本注入到页面当中，客户端是怎么做的呢？也是在 createBundleRenderer 中，配置的 clientManifest，对应 vue-ssr-client-mainfest.json 文件，他是客户端打包资源的构建清单，如 publicPath、all 客户端打包所有构建出的资源文件名称、initial 中的资源自动注入模板页面（`<!--vue-ssr-outlet-->`）的后面、async 存储异步资源信息、modules 保存原始模块的依赖信息，通过标识的方式（每个模块都有一个特定的标识），数组中存储的是该模块的依赖信息，[0,1]指的是 all 中对应的脚本，实际作用是当客户端在实际运行的时候，加载的模块用到哪些资源，vue 会根据此信息去加载那些资源。
+###### 解析渲染流程
 
-  当客户端加载完成后，客户端的 js 是如何工作的呢？
+服务端渲染如何输出
 
-  [客户端激活](https://ssr.vuejs.org/zh/guide/hydration.html)
+- 从路由着手，当客户端请求后匹配路由，调用 renderer 渲染器的 renderer.renderToString 方法
 
-##### 构建配置开发模式-基本思路
+- renderToString 将 vue 实例渲染为字符串发送给客户端，但是 renderToString 中并没有 vue 实例，vue 实例是从哪来的呢？
 
-此时，以实现同构应用基本功能，但对一个完整的应用来说远远不够，例如如何处理同构渲染中的路由、如何在服务端渲染中进行数据预取等操作，在实现之前先实现打包的功能。
+- renderer 是通过 createBundleRenderer 创建，传入的 serverBundle 对应`vue-ssr-server-bundle.json`文件，是通过 server.entry.js 构建出来的结果文件
 
-当前方式，每当修改代码之后，都需要重新 build 构建，构建完之后需要通过 server 重新启动服务，在开发过程中是很麻烦的；需要自动构建、自动重启 web 服务功能、自动刷新浏览器页面内容等功能
+  ```json
+  {
+    "entry": "server-bundle.js", // 入口
+    "files": {...}, // 所有构建结果资源列表
+    "maps": {...} //源代码 source map 信息
+  }
+  ```
 
-开发模式下要根据 src 中源代码的改变，不断重新生成 serverBundle、template、clientManifest 等打包的资源文件，资源文件一旦改变，自动调用 createBundleRenderer 生成新的 renderer 重新渲染
+- renderer 在渲染时会加载 serverBundle 的入口，得到 entrry-server.js 中创建的 vue 实例
+
+- 对此 vue 实例进行渲染，并将渲染的结果注入到 template 模板当中，最终将 template 模板发送到客户端
+
+客户端渲染如何接管并激活
+
+- 客户端需要将打包的 js 脚本注入到页面当中，是怎么做的呢？
+
+- 在 createBundleRenderer 中，配置的 clientManifest，对应 `vue-ssr-client-mainfest.json` 文件，是客户端打包资源的构建清单
+
+  ```json
+  {
+    "publicPath": "/dist/",
+    "all": ["app.5c8c7bcfd286b41168f3.js", "app.5c8c7bcfd286b41168f3.js.map"],
+    "initial": ["app.5c8c7bcfd286b41168f3.js"],
+    "async": [],
+    "modules": {}
+  }
+  /*
+  publicPath：访问静态资源的根相对路径，与 webpack 配置中的 publicPath 一致
+  all：打包后的所有静态资源文件路径
+  initial：页面初始化时需要加载的文件，会在页面加载时配置到 preload 中
+  async：页面跳转时需要加载的文件，会在页面加载时配置到 prefetch 中
+  modules：项目的各个模块包含的文件的序号，对应 all 中文件的顺序；moduleIdentifier和
+  和all数组中文件的映射关系（modules对象是我们查找文件引用的重要数据），实际作用是当客户端在实际运行的时候，加载的模块用到哪些资源，vue 会根据此信息去加载那些资源
+  */
+  ```
+
+- 当客户端加载完成后，客户端的 js 是如何工作的呢？
+
+  详细请查看[客户端激活](https://ssr.vuejs.org/zh/guide/hydration.html)
+
+##### 构建配置开发模式
+
+###### 基本思路
+
+此时，以实现同构应用基本功能，但对一个完整的应用来说远远不够，例如如何处理同构渲染中的路由、如何在服务端渲染中进行数据预取等操作，在实现这些功能之前先实现打包的功能。
+
+当前方式，每当修改代码之后，都需要重新 build 构建，构建完之后需要通过 server 重新启动服务，在开发过程中是很麻烦的；需要以下功能
+
+- 自动构建
+- 自动重启 web 服务功能
+- 自动刷新浏览器页面内容等功能
+- ...
+
+在开发模式和生成模式下不同的思路：
+
+- 生产模式
+
+  - npm run build构建
+  - node server.js启动应用
+
+- 开发模式
+
+  开发模式根据源代码的改变，不断重新生成 serverBundle、template、clientManifest 等打包的资源文件，资源文件一旦改变，自动调用 createBundleRenderer 生成新的 renderer 重新渲染
+
+  - 监视代码变化自动构建、热更新等功能
+  - node server.js启动应用
+
+在 scripts 中新加 start 和 dev
 
 ```json
 "scripts": {
-    "build:client": "cross-env NODE_ENV=production webpack --config build/webpack.client.config.js",
-    "build:server": "cross-env NODE_ENV=production webpack --config build/webpack.server.config.js",
-    "build": "rimraf dist && npm run build:client && npm run build:server",
-    // 启动生产服务
-    "start": "cross-env NODE_ENV=production node server.js",
+    ...
     // 启动开发服务
+    "start": "cross-env NODE_ENV=production node server.js",
+    // 启动生产服务
     "dev": "node server.js"
 },
 ```
 
-在 scripts 中新加 start 和 dev
+修改server.js，根据`NODE_ENV`判断环境
+
+```js
+const fs = require('fs')
+const express = require('express')
+const { createBundleRenderer } = require('vue-server-renderer')
+
+const isProd = process.env.NODE_ENV === 'production'
+let renderer
+
+if (isProd) {
+  const serverBundle = require('./dist/vue-ssr-server-bundle.json')
+  const template = fs.readFileSync('./index.template.html', 'utf-8')
+  const clientManifest = require('./dist/vue-ssr-client-manifest.json')
+
+  renderer = createBundleRenderer(serverBundle, {
+    template,
+    clientManifest,
+  })
+} else {
+  // 开发模式 --> 监视打包构建 -->  -> 重新生成 Renderer 渲染器
+}
+
+// 得到express实例
+const server = express()
+server.use('/dist', express.static('./dist'))
+
+const render = (req, res) => {
+  renderer.renderToString(
+    {
+      title: '拉钩教育',
+      meta: `
+    <meta name="description" content="拉钩">
+  `,
+    },
+    (err, html) => {
+      if (err) {
+        return res.status(500).end('Internal Srever ERROR')
+      }
+      res.end(html)
+    }
+  )
+}
+
+// 此时不用在手动创建vue实例，因为在entry-server中已经创建 renderer会自动找到entry-server得到里面的vue实例
+// 去掉renderToString的第一个参数vue实例
+server.get('/',
+  isProd ? render // 生产模式：使用构建好的包直接渲染
+    : (req, res, next) => {
+        // 需等待renderer渲染器加载完成后，调用render进行渲染
+        render()
+      }
+)
+
+// 启动web服务
+server.listen(3000, () => {
+  console.log('server running at port 3000')
+})
+```
+
+###### 提取处理模块
+
+编写`开发模式 --> 监视打包构建 -->  -> 重新生成 Renderer 渲染器`代码
