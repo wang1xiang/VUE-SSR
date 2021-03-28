@@ -1,14 +1,22 @@
 const fs = require('fs')
 const express = require('express')
 const { createBundleRenderer } = require('vue-server-renderer')
+const setupDevServer = require('./build/setup-dev-server')
 
 const isProd = process.env.NODE_ENV === 'production'
 let renderer
+let onReady // Promise
 
 // 调用createRenderer生成一个渲染器
 // const renderer = require('vue-server-renderer').createRenderer({
 //   template: fs.readFileSync('./index.template.html', 'utf-8'),
 // })
+
+// 得到express实例
+const server = express()
+// 挂载处理静态资源中间件 /dist应该和客户端打包的出口的publicPath保持一致 使用express.static处理静态资源
+// 当请求到/dist开头的资源时，使用express.static尝试在./dist目录下查找并返回
+server.use('/dist', express.static('./dist'))
 
 if (isProd) {
   const serverBundle = require('./dist/vue-ssr-server-bundle.json')
@@ -20,14 +28,20 @@ if (isProd) {
     clientManifest,
   })
 } else {
-  // 开发模式 --> 监视打包构建 -->  -> 重新生成 Renderer 渲染器
+  // 开发模式 --> 监视打包构建 --> 重新生成 Renderer 渲染器
+  /**
+   * 设置开发模式下的服务
+   * server开发模式下需要给web服务挂载一些中间件
+   * 回调函数：每当监视打包构建完成后执行
+   */
+  onReady = setupDevServer(server, (serverBundle, template, clientManifest) => {
+    // 重新生成 Renderer 渲染器
+    renderer = createBundleRenderer(serverBundle, {
+      template,
+      clientManifest,
+    })
+  })
 }
-
-// 得到express实例
-const server = express()
-// 挂载处理静态资源中间件 /dist应该和客户端打包的出口的publicPath保持一致 使用express.static处理静态资源
-// 当请求到/dist开头的资源时，使用express.static尝试在./dist目录下查找并返回
-server.use('/dist', express.static('./dist'))
 
 const render = (req, res) => {
   renderer.renderToString(
@@ -52,9 +66,10 @@ server.get(
   '/',
   isProd
     ? render // 生产模式：使用构建好的包直接渲染
-    : (req, res, next) => {
+    : async (req, res) => {
         // 需等待renderer渲染器加载完成后，调用render进行渲染
-        render()
+        await onReady
+        render(req, res)
       }
 )
 

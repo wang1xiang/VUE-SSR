@@ -404,15 +404,15 @@ src
 
 - 生产模式
 
-  - npm run build构建
-  - node server.js启动应用
+  - npm run build 构建
+  - node server.js 启动应用
 
 - 开发模式
 
   开发模式根据源代码的改变，不断重新生成 serverBundle、template、clientManifest 等打包的资源文件，资源文件一旦改变，自动调用 createBundleRenderer 生成新的 renderer 重新渲染
 
   - 监视代码变化自动构建、热更新等功能
-  - node server.js启动应用
+  - node server.js 启动应用
 
 在 scripts 中新加 start 和 dev
 
@@ -426,7 +426,7 @@ src
 },
 ```
 
-修改server.js，根据`NODE_ENV`判断环境
+修改 server.js，根据`NODE_ENV`判断环境
 
 ```js
 const fs = require('fs')
@@ -472,8 +472,10 @@ const render = (req, res) => {
 
 // 此时不用在手动创建vue实例，因为在entry-server中已经创建 renderer会自动找到entry-server得到里面的vue实例
 // 去掉renderToString的第一个参数vue实例
-server.get('/',
-  isProd ? render // 生产模式：使用构建好的包直接渲染
+server.get(
+  '/',
+  isProd
+    ? render // 生产模式：使用构建好的包直接渲染
     : (req, res, next) => {
         // 需等待renderer渲染器加载完成后，调用render进行渲染
         render()
@@ -488,4 +490,251 @@ server.listen(3000, () => {
 
 ###### 提取处理模块
 
-编写`开发模式 --> 监视打包构建 -->  -> 重新生成 Renderer 渲染器`代码
+编写`开发模式 --> 监视打包构建 --> -> 重新生成 Renderer 渲染器`代码
+
+在开发模式下通过 serupDevServer 重新生成 renderer 渲染器
+
+```js
+...
+const setupDevServer = require('./build/setup-dev-server')
+...
+let onReady // Promise
+...
+// 开发模式 --> 监视打包构建 --> 重新生成 Renderer 渲染器
+/**
+   * 设置开发模式下的服务
+   * server开发模式下需要给web服务挂载一些中间件
+   * 回调函数：每当监视打包构建完成后执行
+   */
+onReady = setupDevServer(server, (serverBundle, template, clientManifest) => {
+    // 重新生成 Renderer 渲染器
+    renderer = createBundleRenderer(serverBundle, {
+        template,
+        clientManifest,
+    })
+})
+server.get(
+  '/',
+  isProd
+    ? render // 生产模式：使用构建好的包直接渲染
+    : async (req, res) => {
+        // 需等待renderer渲染器加载完成后，调用render进行渲染
+        await onReady
+        render()
+      }
+)
+
+...
+```
+
+```js
+// /build/setup-dev-server.js
+module.exports = (server, callback) => {
+  const onReady = new Promise().
+
+  // 监视构建 --> 更新Renderer
+  return onReady
+}
+```
+
+###### update 更新函数
+
+setupDevServer 中定义 update 函数用于更新 renderer 渲染器
+
+```js
+module.exports = (server, callback) => {
+  // 拿到promise中的resolve
+  let ready
+  const onReady = new Promise((r) => (ready = r))
+
+  // 构建资源
+  let template
+  let serverBundle
+  let clientManifest
+
+  // 调用callback更新renderer
+  const update = () => {
+    if (template && serverBundle && clientManifest) {
+      // callback被调用的话 说明开发模式打包构建已经成功
+      ready()
+      // await onReady render()
+      callback(serverBundle, template, clientManifest)
+    }
+  }
+  // 监视构建 --> 更新Renderer
+  return onReady
+}
+/**
+ * update调用时机
+ * 监视构建template --> 调用update --> 更新renderer渲染器
+ * 监视构建serverBundle --> 调用update --> 更新renderer渲染器
+ * 监视构建clientManifest --> 调用update --> 更新renderer渲染器
+ */
+```
+
+- 处理模板文件
+
+  1. 初始时，通过 fs 读取模板文件
+
+     ```js
+     ...
+     const templatePath = path.resolve(__dirname, '../index.template.html')
+     template = fs.readFileSync(templatePath, 'utf-8')
+     console.log(template)
+     ```
+
+     ![image-20210327181355222](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210327181355222.png)
+
+  2. 监视文件变化
+
+     使用[chokidar](https://github.com/paulmillr/chokidar)监视 templatePath 变化，并重新构建
+
+     ```js
+     const chokidar = require('chokidar')
+     ...
+     chokidar.watch(templatePath).on('change', () => {
+         update()
+     })
+     ...
+     ```
+
+- 服务端监视打包
+
+  ```js
+  const serverConfig = require('./webpack.server.config')
+  // 通过webpack创建编译器
+  const serverCompiler = webpack(serverConfig)
+  // 监视资源变化
+  serverCompiler.watch({}, (err, stats) => {
+    // webpack本身错误，例如配置文件错误
+    if (err) throw err
+    // 源代码是否有错
+    if (stats.hasErrors()) return
+    serverBundle = JSON.parse(
+      fs.readFileSync(resolve('../dist/vue-ssr-client-manifest.json'), 'utf-8')
+    )
+    // console.log(serverBundle)
+    update()
+  })
+  ```
+
+- 将数据写入内存中
+
+  webpack 默认会把构建结果存储到磁盘中，对于生产模式构建来说是没有问题的；但是我们在开发模式中会频繁的修改代码触发构建，也就意味着要频繁的操作磁盘数据，而磁盘数据操作相对于来说是比较慢的，所以我们有一种更好的方式，在开发模式下把数据存储到内存中，这样可以极大的提高构建的速度。
+
+  [memfs ](https://github.com/streamich/memfs)是一个兼容 Node 中 fs 模块 API 的内存文件系统，通过它我们可以轻松的实现把 webpack 构 建结果输出到内存中进行管理。
+
+  - 自己配置 memfs，比较麻烦
+
+  - 使用 [webpack-dev-middleware](https://github.com/webpack/webpack-dev-middleware)
+
+    webpack-dev-middleware 作用是，以监听模式启动 webpack，将编译结果输出到内存中，然后将内存文件输出到 Express 服务中。
+
+    ```js
+    ...
+    const devMiddleware = require('webpack-dev-middleware')
+    ...
+    const serverDevMiddleware = devMiddleware(serverCompiler, {
+        logLevel: 'silent', // 关闭日志输出，由 FriendlyErrorsWebpackPlugin 处理
+    })
+    // 每当构建结束的时触发钩子
+    serverCompiler.hooks.done.tap('server', () => {
+        serverBundle = JSON.parse(
+            // 从内存中读取文件
+            serverDevMiddleware.fileSystem.readFileSync(
+                resolve('../dist/vue-ssr-server-bundle.json'),
+                'utf-8'
+            )
+        )
+        console.log(serverBundle)
+        update()
+    })
+    ...
+    ```
+
+    通过打印可以看到控制台已输出从内存中读取到的文件
+
+    ![image-20210328110202127](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210328110202127.png)
+
+- 客户端构建
+
+  客户端打包构建和服务端相同，特别之处在于
+
+  - devMiddleware中需要添加publicPath输出资源的访问路径前缀，应该和客户端打包输出的 publicPath 一致
+- 需要将clientDevMiddle挂载到Express服务器中,读取对其内部数据的访问
+  
+```js
+  const clientConfig = require('./webpack.client.config')
+  // 通过webpack创建编译器
+    const clientCompiler = webpack(clientConfig)
+  const clientDevMiddleware = devMiddleware(clientCompiler, {
+      publicPath: clientConfig.output.publicPath,
+      logLevel: 'silent', // 关闭日志输出，由 FriendlyErrorsWebpackPlugin 处理
+    })
+    // 每当构建结束的时触发钩子
+    clientCompiler.hooks.done.tap('client', () => {
+      clientManifest = JSON.parse(
+        clientDevMiddleware.fileSystem.readFileSync(
+          resolve('../dist/vue-ssr-client-manifest.json'),
+          'utf-8'
+        )
+      )
+      console.log(clientManifest)
+      update()
+    })
+  
+    // 重要!!!将clientDevMiddle挂载到Express服务器中,读取对其内部数据的访问
+    server.use(clientDevMiddleware)
+  ```
+  
+- 热更新
+
+  通过以上配置，已经实现了客户端和服务端的自动打包构建，但是需要手动刷新浏览器才行，通过使用 [webpack-hot-middleware](https://github.com/webpack-contrib/webpack-hot-middleware) 工具开启热更新功能。
+
+  ```js
+...
+  const hotMiddleware = require('webpack-hot-middleware')
+...
+  const clientConfig = require('./webpack.client.config')
+  // 热更新配置
+  clientConfig.plugins.push(new webpack.HotModuleReplacementPlugin())
+clientConfig.entry = [
+      // 'webpack-hot-middleware/client',
+      'webpack-hot-middleware/client?reload=true&noInfo=true',
+      clientConfig.entry.app,
+  ]
+  clientConfig.output.filename = '[name].js' // 热更新模式下确保一致的hash
+  ...
+  // 挂载热更新的中间件
+  server.use(
+      hotMiddleware(clientCompiler, {
+          log: false, // 关闭本身的日志输出
+      })
+  )
+  ```
+  
+  如果不设置clientConfig.output.filename = '[name].js'，会报错
+  
+  ![image-20210328112431941](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210328112431941.png)
+  
+  配置完成后，打开浏览器刷新页面，可以看到_webpack_hmr文件，和服务端交互的用于热更新的客户端的一个库
+  
+  ![image-20210328112540704](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210328112540704.png)
+  
+  通过修改代码文件，可以看到浏览器自动刷新，并输出一下日志，使用`webpack-hot-middleware/client?reload=true&noInfo=true`可去除日志输出
+  
+  ![image-20210328112806448](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210328112806448.png)
+  
+  热更新工作原理：
+  
+  - 中间件将自身安装为 webpack 插件，并侦听编译器事件。
+  
+  - 每个连接的客户端都有一个 Server Sent Events 连接，服务器将在编译器事件上向连接的客户端发布通知。
+  
+    [MDN - 使用服务器发送事件](https://developer.mozilla.org/zh-CN/docs/Web/API/Server-sent_events/Using_server-sent_events)
+  
+    [Server-Sent Events 教程](http://www.ruanyifeng.com/blog/2017/05/server-sent_events.html)
+  
+  - 当客户端收到消息时，它将检查本地代码是否为最新。如果不是最新版本，它将触发 webpack 热 模块重新加载。
+
+##### 编写通用代码
