@@ -738,3 +738,210 @@ clientConfig.entry = [
   - 当客户端收到消息时，它将检查本地代码是否为最新。如果不是最新版本，它将触发 webpack 热 模块重新加载。
 
 ##### 编写通用代码
+
+参考[编写通用代码](https://ssr.vuejs.org/zh/guide/universal.html#%E6%9C%8D%E5%8A%A1%E5%99%A8%E4%B8%8A%E7%9A%84%E6%95%B0%E6%8D%AE%E5%93%8D%E5%BA%94)
+
+避免交叉请求造成的状态污染
+
+如果，创建vue实例的代码不放在函数中，那么相当于所有用户所有请求都共享同一个vue实例，这样就可能造成状态的交叉污染，所以创建vue实例代码放到函数中，调用函数创建独立的vue实例
+如：创建路由实例 创建容器实例都会使用这种方式避免状态污染问题
+
+```js
+const app = new Vue({
+    // 根实例简单的渲染应用程序组件。
+    render: h => h(App)
+})
+// 将来还要返回router、store等数据
+return { app }
+```
+
+##### 配置VueRouter
+
+参考[路由和代码分割](https://ssr.vuejs.org/zh/guide/routing.html)
+
+添加pages文件夹，创建Home.vue、About.vue、404.vue
+
+创建router/index.js文件
+
+```js
+import Vue from 'vue'
+import VueRouter from 'vue-router'
+import Home from '@/pages/Home'
+
+Vue.use(VueRouter)
+
+// 避免状态污染
+export const createRouter = () => {
+  const router = new VueRouter({
+    mode: 'history', // 兼容前后端
+    routes: [
+      {
+        path: '/',
+        name: 'home',
+        component: Home,
+      },
+      {
+        path: '/about',
+        name: 'about',
+        component: () => import('@/pages/about'),
+      },
+      {
+        path: '*',
+        name: '404',
+        component: () => import('@/pages/404'),
+      },
+    ],
+  })
+  return router
+}
+```
+
+app.js中修改
+
+```js
+...
+import { createRouter } from './router'
+
+export function createApp() {
+  const router = createRouter()
+  const app = new Vue({
+    router, // 把路由挂载到Vue根实例中
+    render: (h) => h(App),
+  })
+  return { app, router }
+}
+```
+
+entry-server.js中将vue-router适配到服务端渲染当中
+
+```js
+export default context => {
+  // 因为有可能会是异步路由钩子函数或组件，所以我们将返回一个 Promise，
+  // 以便服务器能够等待所有的内容在渲染前，就已经准备就绪。
+  return new Promise((resolve, reject) => {
+    const { app, router } = createApp()
+
+    // 设置服务器端 router 的位置
+    // context.url客户端的请求路径客户端的请求路径
+    router.push(context.url)
+
+    // 等到 router 将可能的异步组件和钩子函数解析完
+    // 参数(解析成功函数,解析失败函数)
+    router.onReady(() => {
+      const matchedComponents = router.getMatchedComponents()
+      // 匹配不到的路由，执行 reject 函数，并返回 404
+      if (!matchedComponents.length) {
+        return reject({ code: 404 })
+      }
+
+      // Promise 应该 resolve 应用程序实例，以便它可以渲染
+      resolve(app)
+    }, reject)
+  })
+}
+```
+
+可以将以上方法使用async...await进行改造
+
+```js
+export default async (context) => {
+  // 因为有可能会是异步路由钩子函数或组件，所以我们将返回一个 Promise，
+  // 以便服务器能够等待所有的内容在渲染前，就已经准备就绪。
+  const { app, router } = createApp()
+
+  // 设置服务器端 router 的位置
+  router.push(context.url)
+
+  // 等到 router 将可能的异步组件和钩子函数解析完
+  // new Promise((resolve, reject) => {
+  //   router.onReady(resolve, reject)
+  // })
+  await new Promise(router.onReady.bind(router))
+
+  return app
+}
+```
+
+服务端server适配
+
+```js
+...
+server.get('*', isProd
+    ? render // 生产模式：使用构建好的包直接渲染
+    : async (req, res) => {
+        // 需等待renderer渲染器加载完成后，调用render进行渲染
+        await onReady
+        render(req, res)
+      }
+)
+...
+```
+
+服务端路由设置为*，意味着所有的路由都会进入，调用render方法，在render中将路由路径通过context对象传递到渲染当中，渲染函数中调用entry-server.js中的函数，调用createApp创建vue实例，拿到vue和router实例，通过路由实例设置服务端的路由位置
+
+改造render，renderToString返回Promise
+
+```js
+const render = async (req, res) => {
+  // renderToString第一个参数为context对象 被传递到entry-sever.js中
+  try {
+    const html = await renderer.renderToString({
+      title: '拉钩教育',
+      meta: `
+        <meta name="description" content="拉钩">
+      `,
+      url: req.url,
+    })
+    res.setHeader('Content-type', 'text/html;charset=utf8')
+    res.end(html)
+  } catch (e) {
+    res.status(500).end('Internal Srever ERROR')
+  }
+}
+```
+
+entry-client.js操作
+
+需要在挂载 app 之前调用 `router.onReady`，因为路由器必须要提前解析路由配置中的异步组件，才能正确地调用组件中可能存在的路由钩子
+
+```js
+...
+const { app, router } = createApp()
+
+// 这里假定 App.vue 模板中根元素具有 `id="app"`
+router.onReady(() => {
+  app.$mount('#app')
+})
+```
+
+App.vue设置路由出口
+
+```vue
+...
+<ul>
+    <li>
+        <router-link to="/">Home</router-link>
+    </li>
+    <li>
+        <router-link to="/about">About</router-link>
+    </li>
+</ul>
+
+<router-view />
+...
+```
+
+通过build之后可以看到，About和404这种异步加载的组件都被分割成独立的chunk资源，只有在需要的时候才会进行加载，这样就能够避免在初始渲染的时候客户端加载的脚本过大导致激活速度变慢的问题
+
+![image-20210328171318575](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210328171318575.png)
+
+刷新页面查看资源加载过程：可以看到，除了 app 主资源外，其它的资源也被下载下来了，头部的link标签的preload和prefetch作用是预加载对应资源，工作流程是：
+
+- 使用者期望客户端js脚本尽快加载，尽早接管服务端渲染的内容，让其拥有动态交互能力
+- 如果把 script 标签放到body中的话，浏览器会去下载它并执行里面的代码，这个过程会阻塞页面的渲染
+- 真正的script 标签是在页面的底部，preload和prefetch告诉浏览器可以去预加载这个资源，但是不 要执行里面的代码，也不要影响网页的正常渲染，直到遇到真正的 script 标签加载该资源的时候才会去执行里面的代码，这个时候可能已经预加载好了，直接使用就可以了，这样可以提高script标签加载渲染速度
+- preload加载的是当前页面一定会用到的资源，对其进行预加载
+- 而prefetch 资源是加载下一个页面可能用到的资源，浏览器会在空闲的时候对其进行加载，所以它并不一定会把资源加载出来，而 preload 一定会预加载。
+- 当访问 about 页面的时候，它的资源是通过 prefetch 预取过来的，提高了客户端页面导航的响应速度。
+
+![image-20210328171641640](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210328171641640.png)

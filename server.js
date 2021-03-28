@@ -43,27 +43,28 @@ if (isProd) {
   })
 }
 
-const render = (req, res) => {
-  renderer.renderToString(
-    {
+const render = async (req, res) => {
+  // renderToString第一个参数为context对象 被传递到entry-sever.js中
+  try {
+    const html = await renderer.renderToString({
       title: '拉钩教育',
       meta: `
-    <meta name="description" content="拉钩">
-  `,
-    },
-    (err, html) => {
-      if (err) {
-        return res.status(500).end('Internal Srever ERROR')
-      }
-      res.end(html)
-    }
-  )
+        <meta name="description" content="拉钩">
+      `,
+      url: req.url,
+    })
+    res.setHeader('Content-type', 'text/html;charset=utf8')
+    res.end(html)
+  } catch (e) {
+    res.status(500).end('Internal Srever ERROR')
+  }
 }
 
 // 此时不用在手动创建vue实例，因为在entry-server中已经创建 renderer会自动找到entry-server得到里面的vue实例
 // 去掉renderToString的第一个参数vue实例
+// 服务端路由设置为*,以为着所有的路由都会进入这里
 server.get(
-  '/',
+  '*',
   isProd
     ? render // 生产模式：使用构建好的包直接渲染
     : async (req, res) => {
