@@ -685,8 +685,8 @@ module.exports = (server, callback) => {
   
     // 重要!!!将clientDevMiddle挂载到Express服务器中,读取对其内部数据的访问
     server.use(clientDevMiddleware)
-  ```
-  
+```
+
 - 热更新
 
   通过以上配置，已经实现了客户端和服务端的自动打包构建，但是需要手动刷新浏览器才行，通过使用 [webpack-hot-middleware](https://github.com/webpack-contrib/webpack-hot-middleware) 工具开启热更新功能。
@@ -945,3 +945,101 @@ App.vue设置路由出口
 - 当访问 about 页面的时候，它的资源是通过 prefetch 预取过来的，提高了客户端页面导航的响应速度。
 
 ![image-20210328171641640](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210328171641640.png)
+
+#### 管理头部Head内容
+
+服务端和客户端渲染都是用同一个页面模板，页面body部分是动态渲染，但是title和meta都是写死的，所以下面来演示如何为不同页面定制不同的head头部内容。
+
+[Vue Meta ](https://vue-meta.nuxtjs.org/guide/)是一个支持 SSR 的第三方 Vue.js 插件，可轻松实现不同页面的 head 内容管理。 使用它的方式非常简单，而只需在页面组件中使用 metaInfo 属性配置页面的 head 内容即可。
+
+```vue
+<template>
+...
+</template>
+<script>
+    export default {
+        metaInfo: {
+            title: 'My Example App',
+            titleTemplate: '%s - Yay!',
+            htmlAttrs: {
+                lang: 'en',
+                amp: true
+            }
+        }
+    }
+</script>
+```
+
+页面渲染出来的结果
+
+```html
+<html lang="en" amp>
+    <head>
+        <title>My Example App - Yay!</title>
+        ...
+    </head>
+</html>
+```
+
+使用步骤如下:
+
+- 安装: `npm i vue-meta`
+
+- 在通用入口将注册vue-meta，并混入metaInfo
+
+  ```js
+  ...
+  import VueMeta from 'vue-meta'
+  
+  Vue.use(VueMeta)
+  Vue.mixin({
+    metaInfo: {
+      titleTemplate: '%s - 拉勾教育',
+    },
+  })
+  ...
+  ```
+
+- 在服务端渲染入口模块中适配 vue-meta
+
+  ```js
+  ...
+  const { app, router } = createApp()
+  
+  const meta = app.$meta()
+  context.meta = meta
+  ...
+  ```
+
+- 最后在模板页面注入meta信息
+
+  ```html
+  <head>
+      {{{ meta.inject().title.text() }}}
+      {{{ meta.inject().meta.text() }}}
+  </head>
+  ```
+
+- 在组件中添加不同的title信息
+
+  ```js
+  // Home.vue
+  {
+      metaInfo: {
+          title: '首页' // 首页 - 拉勾教育
+      }
+  }
+  
+  // About.vue
+  {
+      metaInfo: {
+          title: 'About' // About - 拉勾教育
+      }
+  }
+  ```
+
+  更多属性设置请参考[metaInfo properties](https://vue-meta.nuxtjs.org/api/#metainfo-properties)
+
+##### 数据预取和状态
+
+[官方文档](https://ssr.vuejs.org/zh/guide/data.html)

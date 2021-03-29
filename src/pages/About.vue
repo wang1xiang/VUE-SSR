@@ -3,6 +3,10 @@
 </template>
 
 <script>
-export default {}
+export default {
+  name: 'Home',
+  metaInfo: {
+    title: '关于'
+  }}
 </script>
 <style></style>

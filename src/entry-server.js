@@ -8,6 +8,8 @@ export default async (context) => {
   // 以便服务器能够等待所有的内容在渲染前，就已经准备就绪。
   const { app, router } = createApp()
 
+  const meta = app.$meta()
+  context.meta = meta
   // 设置服务器端 router 的位置
   router.push(context.url)
 
