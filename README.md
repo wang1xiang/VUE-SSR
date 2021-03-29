@@ -1222,3 +1222,80 @@ export default {
    })
    ```
 
+##### 服务端渲染优化
+
+尽管Vue的SSR速度相当快，但由于创建组件实例和虚拟DOM节点的成本，它无法与纯基于字符串的模板的性能相匹配。在SSR性能至关重要的情况下，明智的利用缓存策略可极大的缩短响应时间并减少服务器负载。
+
+##### 页面级别缓存
+
+如[官方文档](https://ssr.vuejs.org/zh/guide/caching.html#%E9%A1%B5%E9%9D%A2%E7%BA%A7%E5%88%AB%E7%BC%93%E5%AD%98-page-level-caching)中介绍的那样，对特定的页面合理的应用 [micro-caching](https://www.nginx.com/blog/benefits-of-microcaching-nginx/) 能够大大改善服务器处理并发的能力(吞吐率 RPS )。
+
+但并非所有页面都适合使用 micro-caching 缓存策略，我们可以将资源分为三类：
+
+- 静态资源：如 js 、 css 、 images 等。
+- 用户特定的动态资源：不同的用户访问相同的资源会得到不同的内容。
+- 用户无关的动态资源：任何用户访问该资源都会得到相同的内容，但该内容可能在任意时间发生变 化，如博客文章。
+
+只有“用户无关的动态资源”适合应用 micro-caching 缓存策略。
+
+使用[lru-cache](https://github.com/isaacs/node-lru-cache)
+
+```
+npm install lru-cache --save
+```
+
+修改server.js
+
+```js
+...
+const LRU = require('lru-cache')
+
+const cache = new LRU({
+  max: 100,
+  maxAge: 10000, // Important: entries expires after 1 second.
+})
+const isCacheable = (req) => {
+  console.log(req.url)
+  if (req.url === '/posts') {
+    return true
+  }
+}
+...
+const render = async (req, res) => 
+  try {
+    const cacheable = isCacheable(req)
+    if (cacheable) {
+      const html = cache.get(req.url)
+      if (html) {
+        return res.end(html)
+      }
+    }
+    const html = await renderer.renderToString({
+      title: '拉钩教育',
+      meta: `
+        <meta name="description" content="拉钩">
+      `,
+      url: req.url,
+    })
+    res.setHeader('Content-type', 'text/html;charset=utf8')
+    res.end(html)
+    
+    if (cacheable) {
+      cache.set(req.url, html)
+    }
+  } catch (e) {
+    res.status(500).end('Internal Srever ERROR')
+  }
+}
+...
+```
+
+由于内容缓存只有一秒钟，用户将无法查看过期的内容。然而，这意味着，对于每个要缓存的页面，服务器最多只能每秒执行一次完整渲染。
+
+##### 组件级别缓存
+
+Vue SSR内置支持组件级别缓存，在创建renderer时传入[cache](https://ssr.vuejs.org/zh/api/#cache)开启缓存
+
+[官方案例](https://github.com/vuejs/vue-hackernews-2.0)
+
+##### [Gzip 压缩](https://segmentfault.com/a/1190000012571492)

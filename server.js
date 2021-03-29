@@ -2,7 +2,18 @@ const fs = require('fs')
 const express = require('express')
 const { createBundleRenderer } = require('vue-server-renderer')
 const setupDevServer = require('./build/setup-dev-server')
+const LRU = require('lru-cache')
 
+const cache = new LRU({
+  max: 100, // 最大缓存的数目
+  maxAge: 1000, // 重要提示：条目在 1 秒后过期。
+})
+const isCacheable = (req) => {
+  //判断是否需要页面缓存
+  if (req.url && req.url === '/posts') {
+    return true
+  }
+}
 const isProd = process.env.NODE_ENV === 'production'
 let renderer
 let onReady // Promise
@@ -46,6 +57,14 @@ if (isProd) {
 const render = async (req, res) => {
   // renderToString第一个参数为context对象 被传递到entry-sever.js中
   try {
+    const cacheable = isCacheable(req)
+    console.log(cacheable)
+    if (cacheable) {
+      const html = cache.get(req.url)
+      if (html) {
+        return res.end(html)
+      }
+    }
     const html = await renderer.renderToString({
       title: '拉钩教育',
       meta: `
@@ -55,6 +74,10 @@ const render = async (req, res) => {
     })
     res.setHeader('Content-type', 'text/html;charset=utf8')
     res.end(html)
+
+    if (cacheable) {
+      cache.set(req.url, html) // 设置当前缓存页面的内容
+    }
   } catch (e) {
     res.status(500).end('Internal Srever ERROR')
   }
