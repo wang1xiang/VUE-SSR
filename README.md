@@ -1042,4 +1042,183 @@ App.vue设置路由出口
 
 ##### 数据预取和状态
 
-[官方文档](https://ssr.vuejs.org/zh/guide/data.html)
+[官方文档](https://ssr.vuejs.org/zh/guide/data.html)很难看懂，可以通过一个实际需求来了解服务端渲染中的数据预取和状态管理
+
+需求：实现通过服务端渲染的方式来把异步接口数据渲染到页面中
+
+如果是纯客户端渲染，无非就是在页面发请求拿数据，然后在模板中遍历出来，但是想要通过服务端渲染的方式来处理的话就比较麻烦。
+
+使用服务端渲染（服务端获取异步接口数据，交给 Vue 组件去渲染）流程：
+
+![image-20210329113524310](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210329113524310.png)
+
+首先想到的肯定是在组件的生命周期钩子中请求获取数据渲染页面，创建pages/Posts.vue组件
+
+```vue
+<template>
+  <div>
+    <h1>Post List</h1>
+    <ul>
+      <li v-for="post in posts" :key="post.id">{{ post.title }}</li>
+    </ul>
+  </div>
+</template>
+
+<script>
+import axios from 'axios'
+
+export default {
+  name: 'PostList',
+  data () {
+    return {
+      posts: []
+    }
+  },
+  // 服务端渲染 只支持 beforeCreate 和 created
+  // 不会等待 beforeCreate 和 created 中的异步操作
+  // 不支持响应式数据
+  // 所有这种做法在服务端渲染中是不会工作的！！！
+  async created () {
+    console.log('Posts Created Start')
+    const { data } = await axios({
+      method: 'GET',
+      url: 'https://cnodejs.org/api/v1/topics'
+    })
+    this.posts = data.data
+    console.log('Posts Created End')
+  }
+}
+</script>
+```
+
+此时虽然页面可以正常加载，但是可以看到不是首次渲染就渲染好的html片段，而是通过接口请求到的数据
+
+接着我们按照官方文档给出的参考来把服务端渲染中的数据预取以及状态管理来处理一下。
+
+核心思路就是把在服务端渲染期间获取的数据存储到 Vuex 容器中， 然后把容器中的数据同步到客户端，这样就保持了前后端渲染的数据状态同步，避免了客户端重新渲染 的问题。
+
+1. 通过Vuex创建容器实例，并挂载到Vue实例
+
+   ```js
+   // store/index.js
+   import Vue from 'vue'
+   import Vuex from 'vuex'
+   import axios from 'axios'
+   Vue.use(Vuex)
+   export const createStore = () => {
+       return new Vuex.Store({
+           state: {
+               posts: [] // 文章列表
+           },
+           mutations: {
+               // 修改容器状态
+               setPosts (state, data) {
+                   state.posts = data
+               }
+           },
+           actions: {
+               async getPosts ({ commit }) {
+                   const { data } = await axios({
+                       method: 'GET',
+                       url: 'https://cnodejs.org/api/v1/topics'
+                   })
+                   commit('setPosts', data.data)
+               }
+           }
+       })
+   }
+   ```
+
+2. 在通用应用入口中将 Vuex 容器挂载到 Vue 根实例
+
+   ```js
+   // app.js
+   ...import { createStore } from './store'
+   ...
+   export function createApp () {
+       const router = createRouter()
+       const store = createStore()
+       const app = new Vue({
+           router, // 把路由挂载到 Vue 根实例中
+           store, // 把容器挂载到 Vue 根实例
+           // 根实例简单的渲染应用程序组件。
+           render: h => h(App)
+       })
+       return { app, router, store }
+   }
+   ```
+
+3. 在组件中使用 serverPrefetch 触发容器中的 action
+
+   ```vue
+   <template>
+     <div>
+       <h1>Post List</h1>
+       <ul>
+         <li v-for="post in posts" :key="post.id">{{ post.title }}</li>
+       </ul>
+     </div>
+   </template>
+   
+   <script>
+   import { mapState, mapActions } from 'vuex'
+   
+   export default {
+     name: 'PostList',
+     metaInfo: {
+       title: 'Posts'
+     },
+     computed: {
+       ...mapState(['posts'])
+     },
+   
+     // Vue SSR 特殊为服务端渲染提供的一个生命周期钩子函数
+     serverPrefetch () {
+       // 一定按照这种形式：发起 action，返回 Promise
+       // this.$store.dispatch('getPosts')
+       return this.getPosts()
+     },
+     methods: {
+       ...mapActions(['getPosts'])
+     }
+   }
+   </script>
+   ```
+
+4. 在服务端渲染应用入口中将容器状态序列化到页面中
+
+   接下来我们要做的就是把在服务端渲染期间所获取填充到容器中的数据同步到客户端容器中，从而避免两个端状态不一致导致客户端重新渲染的问题。
+
+   ```js
+   // entry-server.js
+   router.onReady...
+   context.rendered = () => {
+       // 在应用渲染完成以后，服务端 Vuex 容器中已经填充了状态数据
+       // 这里手动的把容器中的状态数据放到 context 上下文中
+       // Renderer 在渲染页面模板的时候会把 state 序列化为字符串串内联到页面中
+       // window.__INITIAL_STATE__ = store.state
+       context.state = store.state
+   }
+   ```
+
+   两个端数据状态没有同步，还需设置客户端数据状态
+
+   ![image-20210329083452856](C:\Users\xiang wang\AppData\Roaming\Typora\typora-user-images\image-20210329083452856.png)
+
+5. 最后，在客户端渲染入口中把服务端传递过来的状态数据填充到客户端 Vuex 容器中
+
+   ```js
+   // entry-client.js
+   import { createApp } from './app'
+   // 客户端特定引导逻辑……
+   const { app, router, store } = createApp()
+   // 如果当前页面中有 __INITIAL_STATE__ 数据，则直接将其填充到客户端容器中
+   if (window.__INITIAL_STATE__) {
+       // We initialize the store state with the data injected from the server
+       store.replaceState(window.__INITIAL_STATE__)
+   }
+   router.onReady(() => {
+       app.$mount('#app')
+   })
+   ```
+
